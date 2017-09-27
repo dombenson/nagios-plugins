@@ -641,6 +641,10 @@ void print_help(void){
 	printf ("    %s\n", _("Expected offset of the ntp server relative to local server (seconds)"));
         printf (" %s\n", "-S, --ignore-stratum");
         printf ("    %s\n", _("Do not check the stratum returned by the ntp server, just the time"));
+        printf (" %s\n", "-n, --num-queries=INTEGER");
+        printf ("    %s\n", _("Number of queries to average (1-10)"));
+        printf (" %s\n", "-i, --interval=INTEGER");
+        printf ("    %s\n", _("Poll wait time before re-sending requests (msec, 50-5000)"));
 
 	printf (UT_CONN_TIMEOUT, DEFAULT_SOCKET_TIMEOUT);
 	printf (UT_VERBOSE);
@@ -670,6 +674,6 @@ void
 print_usage(void)
 {
 	printf ("%s\n", _("Usage:"));
-	printf(" %s -H <host> [-4|-6] [-w <warn>] [-c <crit>] [-v verbose] [-o <time offset>]\n", progname);
+	printf(" %s -H <host> [-4|-6] [-w <warn>] [-c <crit>] [-v verbose] [-o <time offset>] [-i <interval=100>] [-n <count=4>]\n", progname);
 }
 
