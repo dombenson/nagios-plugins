@@ -49,15 +49,18 @@ static int quiet=0;
 static char *owarn="60";
 static char *ocrit="120";
 static int time_offset=0;
+static int ignore_stratum=0;
+static int avg_num=4;
+static int wait_msec=100;
 
 int process_arguments (int, char **);
 thresholds *offset_thresholds = NULL;
 void print_help (void);
 void print_usage (void);
 
-/* number of times to perform each request to get a good average. */
-#ifndef AVG_NUM
-#define AVG_NUM 4
+/* maximum number of times to perform each request to get a good average. */
+#ifndef MAX_NUM
+#define MAX_NUM 10
 #endif
 /* max size of control message data */
 #define MAX_CM_SIZE 468
@@ -84,7 +87,7 @@ typedef struct {
 	uint8_t stratum;        /* copied verbatim from the ntp_message */
 	double rtdelay;         /* converted from the ntp_message */
 	double rtdisp;          /* converted from the ntp_message */
-	double offset[AVG_NUM]; /* offsets from each response */
+	double offset[MAX_NUM]; /* offsets from each response */
 	uint8_t flags;       /* byte with leapindicator,vers,mode. see macros */
 } ntp_server_results;
 
@@ -251,12 +254,12 @@ int best_offset_server(const ntp_server_results *slist, int nservers){
 		/* Sort out servers that didn't respond or responede with a 0 stratum;
 		 * stratum 0 is for reference clocks so no NTP server should ever report
 		 * a stratum 0 */
-		if ( slist[cserver].stratum == 0){
+		if ( (!ignore_stratum) && (slist[cserver].stratum == 0)){
 			if (verbose) printf("discarding peer %d: stratum=%d\n", cserver, slist[cserver].stratum);
 			continue;
 		}
 		/* Sort out servers with error flags */
-		if ( LI(slist[cserver].flags) == LI_ALARM ){
+		if ( (!ignore_stratum) && (LI(slist[cserver].flags) == LI_ALARM )){
 			if (verbose) printf("discarding peer %d: flags=%d\n", cserver, LI(slist[cserver].flags));
 			continue;
 		}
@@ -370,7 +373,7 @@ double offset_request(const char *host, int *status){
 		now_time=time(NULL);
 
 		for(i=0; i<num_hosts; i++){
-			if(servers[i].waiting<now_time && servers[i].num_responses<AVG_NUM){
+			if(servers[i].waiting<now_time && servers[i].num_responses<avg_num){
 				if(verbose && servers[i].waiting != 0) printf("re-");
 				if(verbose) printf("sending request to peer %d\n", i);
 				setup_request(&req[i]);
@@ -381,7 +384,7 @@ double offset_request(const char *host, int *status){
 		}
 
 		/* quickly poll for any sockets with pending data */
-		servers_readable=poll(ufds, num_hosts, 100);
+		servers_readable=poll(ufds, num_hosts, wait_msec);
 		if(servers_readable==-1){
 			perror("polling ntp sockets");
 			die(STATE_UNKNOWN, "communication errors");
@@ -389,7 +392,7 @@ double offset_request(const char *host, int *status){
 
 		/* read from any sockets with pending data */
 		for(i=0; servers_readable && i<num_hosts; i++){
-			if(ufds[i].revents&POLLIN && servers[i].num_responses < AVG_NUM){
+			if(ufds[i].revents&POLLIN && servers[i].num_responses < avg_num){
 				if(verbose) {
 					printf("response from peer %d: ", i);
 				}
@@ -409,7 +412,7 @@ double offset_request(const char *host, int *status){
 				servers[i].flags=req[i].flags;
 				servers_readable--;
 				one_read = 1;
-				if(servers[i].num_responses==AVG_NUM) servers_completed++;
+				if(servers[i].num_responses==avg_num) servers_completed++;
 			}
 		}
 		/* lather, rinse, repeat. */
@@ -450,10 +453,13 @@ int process_arguments(int argc, char **argv){
 		{"version", no_argument, 0, 'V'},
 		{"help", no_argument, 0, 'h'},
 		{"verbose", no_argument, 0, 'v'},
+                {"ignore-stratum", no_argument, 0, 'S'},
 		{"use-ipv4", no_argument, 0, '4'},
 		{"use-ipv6", no_argument, 0, '6'},
 		{"quiet", no_argument, 0, 'q'},
 		{"time-offset", optional_argument, 0, 'o'},
+                {"num-queries", optional_argument, 0, 'n'},
+                {"interval", optional_argument, 0, 'i'},
 		{"warning", required_argument, 0, 'w'},
 		{"critical", required_argument, 0, 'c'},
 		{"timeout", required_argument, 0, 't'},
@@ -467,7 +473,7 @@ int process_arguments(int argc, char **argv){
 		usage ("\n");
 
 	while (1) {
-		c = getopt_long (argc, argv, "Vhv46qw:c:t:H:p:o:", longopts, &option);
+		c = getopt_long (argc, argv, "Vhv46qSw:c:t:H:p:o:n:i:", longopts, &option);
 		if (c == -1 || c == EOF || c == 1)
 			break;
 
@@ -482,6 +488,9 @@ int process_arguments(int argc, char **argv){
 			break;
 		case 'v':
 			verbose++;
+			break;
+		case 'S':
+			ignore_stratum = 1;
 			break;
 		case 'q':
 			quiet = 1;
@@ -502,6 +511,16 @@ int process_arguments(int argc, char **argv){
 			break;
 		case 't':
 			timeout_interval = parse_timeout_string(optarg);
+			break;
+		case 'n':
+			avg_num = atoi(optarg);
+			if((avg_num < 1) || (avg_num > MAX_NUM))
+				usage2(_("Invalid query count"), optarg);
+			break;
+		case 'i':
+			wait_msec = atoi(optarg);
+			if((wait_msec < 50) || (wait_msec > 5000))
+				usage2(_("Invalid poll interval"), optarg);
 			break;
 		case 'o':
 			time_offset=atoi(optarg);
@@ -620,6 +639,9 @@ void print_help(void){
 	printf ("    %s\n", _("Offset to result in critical status (seconds)"));
 	printf (" %s\n", "-o, --time_offset=INTEGER");
 	printf ("    %s\n", _("Expected offset of the ntp server relative to local server (seconds)"));
+        printf (" %s\n", "-S, --ignore-stratum");
+        printf ("    %s\n", _("Do not check the stratum returned by the ntp server, just the time"));
+
 	printf (UT_CONN_TIMEOUT, DEFAULT_SOCKET_TIMEOUT);
 	printf (UT_VERBOSE);
 
